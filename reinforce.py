@@ -1,6 +1,8 @@
 # TensorFlow implementation of Policy Gradient (REINFORCE)
 
+import argparse
 import gym
+import roboschool
 import numpy as np
 import tensorflow as tf
 
@@ -36,14 +38,12 @@ class Policy(object):
         hidden = swish(tf.matmul(s, self.W_1) + self.b_1, self.beta)
         return tf.matmul(hidden, self.W_2) + self.b_2
 
-class Environment(object):
-    def __init__(self, name):
-        self.name = name
-
-    def rollout(self, policy, n_iter):
-        # TODO: implement rollout
-        
-        return 
-
 def main(args):
-    print('')
+    return
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='TensorFlow implementation of REINFORCE')
+    parser.add_argument('--env', str, '')
+    args = parser.parse_args()
+
+    main(args)
