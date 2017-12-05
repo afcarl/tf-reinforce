@@ -6,6 +6,8 @@ import roboschool
 import numpy as np
 import tensorflow as tf
 
+from OpenGL import GL
+
 parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
 parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
 parser.add_argument("--n_iter", type=int, default=10000, help="Number of iterations per episode.")
