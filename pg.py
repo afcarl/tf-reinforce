@@ -10,7 +10,8 @@ from OpenGL import GL
 
 parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
 parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
-parser.add_argument("--gamma", type=float, default=0.9, help="Discount factor (gamma).")
+parser.add_argument("--gamma", type=float, default=0.9, help="Discount factor for rewards.")
+parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for optimizer.")
 parser.add_argument("--env_id", type=str, default="RoboschoolHumanoid-v1",
                     help="OpenAI Roboschool Gym environment ID.")
 args = parser.parse_args()
@@ -57,6 +58,10 @@ def rollout(policy, env, sess, render=False):
         state, reward, done, info = env.step(action.reshape((action_size,)))
 
 
+def train(trajectory, train_op):
+    s, a, r = map(list, zip(*trajectory))
+    print(s, a, r)
+
 # A two-layered policy network with a residual connection and a ReLU nonlinearity.
 with tf.name_scope("policy"):
     # Observation of the state.
@@ -64,26 +69,32 @@ with tf.name_scope("policy"):
         observation = tf.placeholder(tf.float32, [None, obs_size])
 
     # Hidden layer of the policy network.
-    with tf.name_scope("hidden_layer"):
+    with tf.name_scope("layer_1"):
         W_1 = weight_variable([obs_size, obs_size], "W_1")
         b_1 = bias_variable([obs_size], "b_1")
         # Input to hidden connections with identity mapping
-        a_1 = tf.nn.relu(tf.matmul(observation, W_1 + tf.eye(obs_size)) + b_1)
+        a_1 = tf.nn.relu(tf.matmul(observation, W_1) + b_1)
+        # a_1 = tf.nn.relu(tf.matmul(observation, W_1 + tf.eye(obs_size)) + b_1)
 
     # Output layer of the policy network.
-    with tf.name_scope("output_layer"):
+    with tf.name_scope("layer_2"):
         W_2 = weight_variable([obs_size, action_size], "W_2")
         b_2 = bias_variable([action_size], "b_2")
         policy = tf.matmul(a_1, W_2) + b_2
 
 # Given the output of the policy network, compute the policy gradient.
 with tf.name_scope("policy_gradient"):
+    action = tf.placeholder(tf.float32, [None, 1])
     reward = tf.placeholder(tf.float32, [None, 1])
-    policy_gradient = tf.reduce_mean(tf.log(policy) * reward)
-    train_op = tf.train.AdamOptimizer().minimize(-policy_gradient)
+    log_prob = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=policy, labels=action)
+    policy_gradient = tf.reduce_mean(log_prob * reward)
+
+# Train the policy network given the computed gradient.
+with tf.name_scope("train"):
+    train_op = tf.train.AdamOptimizer(args.lr).minimize(policy_gradient)
 
 with tf.Session() as sess:
-    summary_writer = tf.summary.FileWriter("./", graph=sess.graph)
+    summary_writer = tf.summary.FileWriter("logs/", graph=sess.graph)
     sess.run(tf.global_variables_initializer())
     trajectory = []
     for ep in range(args.n_eps):
@@ -93,6 +104,9 @@ with tf.Session() as sess:
             s_1, r, done, info = env.step(a.reshape([action_size]))
             trajectory.append((s, a, r))
             if done:
+
+                train(trajectory, train_op)
+
                 states = np.stack([t[0].reshape([obs_size]) for t in trajectory], axis=0)
                 discounted = discount(args.gamma, [t[2] for t in trajectory])
                 dc_rewards = np.stack(discounted, axis=0).reshape([len(trajectory), 1])
