@@ -1,0 +1,39 @@
+environment: RoboschoolHumanoidFlagrunHarder-v1
+observation size: 44
+action size: 17
+environment: RoboschoolInvertedPendulumSwingup-v1
+observation size: 5
+action size: 1
+environment: RoboschoolHopper-v1
+observation size: 15
+action size: 3
+environment: RoboschoolWalker2d-v1
+observation size: 22
+action size: 6
+environment: RoboschoolHalfCheetah-v1
+observation size: 26
+action size: 6
+environment: RoboschoolAnt-v1
+observation size: 28
+action size: 8
+environment: RoboschoolReacher-v1
+observation size: 9
+action size: 2
+environment: RoboschoolHumanoid-v1
+observation size: 44
+action size: 17
+environment: RoboschoolInvertedDoublePendulum-v1
+observation size: 9
+action size: 1
+environment: RoboschoolPong-v1
+observation size: 13
+action size: 2
+environment: RoboschoolHumanoidFlagrun-v1
+observation size: 44
+action size: 17
+environment: RoboschoolInvertedPendulum-v1
+observation size: 5
+action size: 1
+environment: RoboschoolAtlasForwardWalk-v1
+observation size: 70
+action size: 30
