@@ -9,6 +9,7 @@ import tensorflow as tf
 from OpenGL import GL
 
 parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
+parser.add_argument("--arch", type=int, nargs=2, help="Number of neurons in 2 hidden layers.")
 parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
 parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for rewards.")
 parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for Adam optimizer.")
@@ -23,9 +24,9 @@ args = parser.parse_args()
 roboschool_envs = [s.id for s in gym.envs.registry.all() if s.id.startswith("Roboschool")]
 env_id = args.env_id if args.env_id in roboschool_envs else "RoboschoolAnt-v1"
 
-# Initialize OpenAI Gym environment, and configure state size, hidden size, and the action size,
-# according to the environment. Note that all environments from Roboschool has Box for observation
-# spaces and action spaces.
+# Initialize OpenAI Gym environment, and configure the observation size and the action size,
+# according to the environment. Note that all environments from Roboschool uses Box for 
+# observation spaces and action spaces.
 env = gym.make(env_id)
 obs_size = env.observation_space.shape[0]
 act_size = env.action_space.shape[0]
@@ -39,52 +40,60 @@ def bias_variable(shape, name):
     """ Return a tensorflow.Variable for bias. """
     return tf.Variable(tf.constant(0.1, shape=shape), name=name)
 
-def dc_factors(gamma, t):
-    """ Return a tensorflow.Tensor of discount factors. """
-    return tf.constant([gamma ** i for i in range(t)], dtype=tf.float32, shape=(t, ))
-
-class Policy(object):
+class GaussianPolicy(object):
     """ Gaussian policy network with three layers. """
 
-    def __init__(self, obs_size, act_size):
-        self.sess = tf.Session()
+    def __init__(self, arch, sigma_sq):
+        if len(arch) != 4:
+            raise ValueError("Policy network architecture must contain 4 ints")
 
-        # Observation represents state argument (s) of the policy.
-        # In terms of a neural network, this is the input layer.
+        # Observation represents state argument (s) of the policy (pi).
+        # In terms of a neural network, this is the input layer of the policy network.
         with tf.name_scope("observation"):
-            self.observation = tf.placeholder(tf.float32, (None, obs_size))
+            self.observation = tf.placeholder(tf.float32, (None, arch[0]))
 
-        # Hidden layer of the policy network.
-        # This layer has the same dimensions as the input observation dimensions.
-        with tf.name_scope("hidden"):
-            W_1 = weight_variable((obs_size, obs_size), "W_1")
-            b_1 = bias_variable((obs_size, ), "b_1")
-            a_1 = tf.nn.relu(tf.matmul(self.observation, W_1) + b_1)
+        # First hidden layer of the policy network.
+        with tf.name_scope("hidden_1"):
+            W_1 = weight_variable((arch[0], arch[1]), "W_1")
+            b_1 = bias_variable((arch[1], ), "b_1")
+            a_1 = tf.nn.relu(tf.matmul(observation, W_1) + b_1)
+
+        # Second hidden layer of the policy network.
+        with tf.name_scope("hidden_2"):
+            W_2 = weight_variable((arch[1], arch[2]), "W_2")
+            b_2 = bias_variable((arch[2], ), "b_2")
+            a_2 = tf.nn.relu(tf.matmul(a_1, W_2) + b_2)
 
         # Output layer of the policy network.
-        # This layer returns the probability of each action.
+        # This layer returns the mean vector of the action distribution.
         with tf.name_scope("output"):
-            W_2 = weight_variable((obs_size, act_size), "W_2")
-            b_2 = bias_variable((act_size, ), "b_2")          
-            a_2 = tf.matmul(a_1, W_2) + b_2
+            W_3 = weight_variable((arch[2], arch[3]), "W_3")
+            b_3 = bias_variable((arch[3], ), "b_3")
+            mu = tf.matmul(a_2, W_3) + b_3
 
         # Use the output of the policy network as the mean of the action disctribution.
         # The action is sampled from the distribution to compute gradient.
         with tf.name_scope("action"):
-            self.pi_sa = tf.distributions.Normal(a_2, args.var)
+            self.pi_sa = tf.distributions.Normal(mu, sigma_sq)
             self.action = self.pi_sa.sample()
 
+        # Reward placeholder for updating the policy during training.
         with tf.name_scope("reward"):
             self.reward = tf.placeholder(tf.float32, (None, ))
 
+        # Loss function of Gaussian policy.
+        # L = log(pi(a | s)) * V(s, a)
         with tf.name_scope("loss"):
             log_pi_sa = self.pi_sa.log_prob(self.action)
             self.loss = tf.reduce_mean(log_pi_sa * self.reward)
 
+        # Training operator with Adam optimizer.
+        # Note that the optimizer minimizes the negative loss, i.e., maximizes the loss.
         with tf.name_scope("train_op"):
             optimizer = tf.train.AdamOptimizer(args.lr)
             self.train_op = optimizer.minimize(-self.loss)
 
+        self.sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
     def __call__(self, state):
@@ -143,21 +152,23 @@ class Trajectory(object):
         gammas = dc_factors(args.gamma, self._len)
         return gammas * np.stack(self._reward_buffer, axis=0)
 
-pi = Policy(obs_size, act_size)
-for ep in range(args.n_eps):
-    trajectory = Trajectory()
-    state = env.reset()
-    while True:
-        action = pi(state[np.newaxis, :]).reshape((act_size))
-        state_, reward, done, info = env.step(action)
-        trajectory.append(state, action, reward)
-        if done:
-            states = trajectory.states
-            rewards = trajectory.rewards
-            pi.optimize(states, rewards)
-            # Only print the training process 10 times.
-            if ep % (args.n_eps / 10) == 0:
-                ret = tf.reduce_sum(rewards).eval(pi.sess)
-                print("Episode %d: return = %f" % (ep, ret))
-        else:
-            state = state_
+def main(args):
+    pi = Policy(obs_size, act_size)
+    for ep in range(args.n_eps):
+        trajectory = Trajectory()
+        state = env.reset()
+        while True:
+            action = pi(state[np.newaxis, :]).reshape((act_size))
+            state_, reward, done, info = env.step(action)
+            trajectory.append(state, action, reward)
+            if done:
+                states = trajectory.states
+                rewards = trajectory.rewards
+                pi.optimize(states, rewards)
+                # Only print the training process 10 times.
+                if ep % (args.n_eps / 10) == 0:
+                    ret = tf.reduce_sum(rewards).eval(pi.sess)
+                    print("Episode %d: return = %f" % (ep, ret))
+            else:
+                state = state_
+    
