@@ -8,29 +8,6 @@ import tensorflow as tf
 # quick fix for roboschool
 from OpenGL import GL
 
-parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
-parser.add_argument("--arch", type=int, nargs=2, help="Number of neurons in 2 hidden layers.")
-parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
-parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for rewards.")
-parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for Adam optimizer.")
-parser.add_argument("--var", type=float, default=0.01, help="Variance for Gaussian policy.")
-parser.add_argument("--env_id", type=str, default="RoboschoolAnt-v1", 
-                    help="OpenAI Roboschool Gym environment ID.")
-args = parser.parse_args()
-
-# Available OpenAI Gym environments from Roboschool.
-# If the argument environment is not in this list, run with the default
-# environment (RoboschoolHumanoid-v1).
-roboschool_envs = [s.id for s in gym.envs.registry.all() if s.id.startswith("Roboschool")]
-env_id = args.env_id if args.env_id in roboschool_envs else "RoboschoolAnt-v1"
-
-# Initialize OpenAI Gym environment, and configure the observation size and the action size,
-# according to the environment. Note that all environments from Roboschool uses Box for 
-# observation spaces and action spaces.
-env = gym.make(env_id)
-obs_size = env.observation_space.shape[0]
-act_size = env.action_space.shape[0]
-
 def weight_variable(shape, name):
     """ Return a tensorflow.Variable for dense layer weights. """
     init_val = tf.truncated_normal(shape, stddev=0.1)
@@ -66,7 +43,7 @@ class GaussianPolicy(object):
 
         # Output layer of the policy network.
         # This layer returns the mean vector of the action distribution.
-        with tf.name_scope("output"):
+        with tf.name_scope("action_mean"):
             W_3 = weight_variable((arch[2], arch[3]), "W_3")
             b_3 = bias_variable((arch[3], ), "b_3")
             mu = tf.matmul(a_2, W_3) + b_3
@@ -100,13 +77,13 @@ class GaussianPolicy(object):
         """ Sample from the action distribution given the argument state. """
         return self.sess.run(self.action, feed_dict={self.observation: state})
 
-    def optimize(self, state, reward):
+    def learn(self, state, reward):
         """ Optimize the policy given a set of states and corresponding rewards. """
         feed_dict = {self.observation: state, self.reward: reward}
         loss, _ = self.sess.run([self.loss, self.train_op], feed_dict=feed_dict)
         return loss
 
-class Trajectory(object):
+class Episode(object):
     """ Sequence of (state, action, reward). """
 
     def __init__(self):
@@ -116,7 +93,7 @@ class Trajectory(object):
         self._len = 0
 
     def __str__(self):
-        return "Trajectory(%d)" % self._len
+        return "Episode(%d)" % self._len
 
     def __len__(self):
         return self._len
@@ -124,9 +101,9 @@ class Trajectory(object):
     def __getitem__(self, t):
         """ Return a tuple of (state, action, reward) at time t. """
         if type(t) is not int:
-            raise TypeError("Trajectory indices must be integers, not %s" % type(t))
+            raise TypeError("Episode indices must be integers, not %s" % type(t))
         if t not in range(0, self._len):
-            raise IndexError("Trajectory index out of range")
+            raise IndexError("Episode index out of range")
         return (self._state_buffer[t], self._action_buffer[t], self._reward_buffer[t])
 
     def append(self, s, a, r):
@@ -149,18 +126,37 @@ class Trajectory(object):
     @property
     def rewards(self):
         """ Return the reward vector. """
-        gammas = dc_factors(args.gamma, self._len)
-        return gammas * np.stack(self._reward_buffer, axis=0)
+        return np.stack(self._reward_buffer, axis=0)
 
 def main(args):
-    pi = Policy(obs_size, act_size)
+    """ Execute REINFORCE (Monte Carlo policy gradient). """
+
+    # Available OpenAI Gym environments from Roboschool.
+    # If the argument environment is not in this list, run with the default
+    # environment (RoboschoolHumanoid-v1).
+    roboschool_envs = [s.id for s in gym.envs.registry.all() if s.id.startswith("Roboschool")]
+    env_id = args.env_id if args.env_id in roboschool_envs else "RoboschoolAnt-v1"
+    
+    # Initialize OpenAI Gym environment, and configure the observation size and the action size,
+    # according to the environment. Note that all environments from Roboschool uses Box for 
+    # observation spaces and action spaces.
+    env = gym.make(env_id)
+    arch = [
+        env.observation_space.shape[0],
+        args.hidden[0],
+        args.hidden[1],
+        env.action_space.shape[0]
+    ]
+    
+    pi = GaussianPolicy(arch, args.var)
     for ep in range(args.n_eps):
-        trajectory = Trajectory()
+        episode = Episode()
         state = env.reset()
         while True:
-            action = pi(state[np.newaxis, :]).reshape((act_size))
+            action = pi(state[np.newaxis, :]).reshape((arch[3]))
             state_, reward, done, info = env.step(action)
-            trajectory.append(state, action, reward)
+            episode.append(state, action, reward)
+            state = state_
             if done:
                 states = trajectory.states
                 rewards = trajectory.rewards
@@ -169,6 +165,17 @@ def main(args):
                 if ep % (args.n_eps / 10) == 0:
                     ret = tf.reduce_sum(rewards).eval(pi.sess)
                     print("Episode %d: return = %f" % (ep, ret))
-            else:
-                state = state_
+                break
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
+    parser.add_argument("--hidden", type=int, nargs=2, help="Dimensions of 2 hidden layers.")
+    parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
+    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for rewards.")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for optimizer.")
+    parser.add_argument("--var", type=float, default=0.01, help="Variance for Gaussian policy.")
+    parser.add_argument("--env_id", type=str, default="RoboschoolAnt-v1", 
+                        help="OpenAI Roboschool Gym environment ID.")
+    args = parser.parse_args()
     
+    main(args)
