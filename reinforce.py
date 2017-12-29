@@ -38,35 +38,30 @@ class GaussianPolicy(object):
 
     def __init__(self, arch, sigma_sq):
         if len(arch) != 4:
-            raise ValueError("Policy network architecture must contain 4 ints")
-        # Store architecture information.
-        self.obs_size = arch[0]
-        self.hidden_size_1 = arch[1]
-        self.hidden_size_2 = arch[2]
-        self.act_size = arch[3]
+            raise ValueError("Policy network architecture must contain 4 integers")
 
         # Observation represents state argument (s) of the policy (pi).
         # In terms of a neural network, this is the input layer of the policy network.
         with tf.name_scope("observation"):
-            self.observation = tf.placeholder(tf.float32, [None, self.obs_size])
+            self.observation = tf.placeholder(tf.float32, [None, arch[0]])
 
         # First hidden layer of the policy network.
         with tf.name_scope("hidden_1"):
             with tf.name_scope("W_1"):
-                W_1 = weight_variable([self.obs_size, self.hidden_size_1])
+                W_1 = weight_variable([arch[0], arch[1]])
                 variable_summaries(W_1)
             with tf.name_scope("b_1"):
-                b_1 = bias_variable([self.hidden_size_1])
+                b_1 = bias_variable([arch[1]])
                 variable_summaries(b_1)
             a_1 = tf.nn.relu(tf.matmul(self.observation, W_1) + b_1)
 
         # Second hidden layer of the policy network.
         with tf.name_scope("hidden_2"):
             with tf.name_scope("W_2"):
-                W_2 = weight_variable([self.hidden_size_1, self.hidden_size_2])
+                W_2 = weight_variable([arch[1], arch[2]])
                 variable_summaries(W_2)
             with tf.name_scope("b_2"):
-                b_2 = bias_variable([self.hidden_size_2])
+                b_2 = bias_variable([arch[2]])
                 variable_summaries(b_2)
             a_2 = tf.nn.relu(tf.matmul(a_1, W_2) + b_2)
 
@@ -74,10 +69,10 @@ class GaussianPolicy(object):
         # This layer returns the mean vector of the action distribution.
         with tf.name_scope("action_mean"):
             with tf.name_scope("W_3"):
-                W_3 = weight_variable([self.hidden_size_2, self.act_size])
+                W_3 = weight_variable([arch[2], arch[3]])
                 variable_summaries(W_3)
             with tf.name_scope("b_3"):
-                b_3 = bias_variable([self.act_size])
+                b_3 = bias_variable([arch[3]])
                 variable_summaries(b_3)
             with tf.name_scope("mu"):
                 self.mu = tf.matmul(a_2, W_3) + b_3
@@ -90,16 +85,15 @@ class GaussianPolicy(object):
             self.action = self.pi_sa.sample()
             tf.summary.histogram("action", self.action)
 
-        # Value placeholder for updating the policy during training.
-        # For REINFORCE, the return value G_t for each time step t is used for value.
-        with tf.name_scope("value"):
-            self.value = tf.placeholder(tf.float32, [None, 1])
+        # Return value G_t at each time step t for computing loss.
+        with tf.name_scope("G_t"):
+            self.G_t = tf.placeholder(tf.float32, [None, 1])
 
         # Loss function of Gaussian policy.
         # L = log(pi(a | s)) * V(s, a)
         with tf.name_scope("loss"):
             log_pi_sa = self.pi_sa.log_prob(self.action)
-            self.loss = tf.reduce_mean(log_pi_sa * self.value)
+            self.loss = tf.reduce_mean(log_pi_sa * self.G_t)
             tf.summary.scalar("objective", -self.loss)
 
         # Training operator with Adam optimizer.
@@ -117,9 +111,9 @@ class GaussianPolicy(object):
         """ Sample from the action distribution given the argument state. """
         return self.sess.run(self.action, feed_dict={self.observation: state})
 
-    def learn(self, episode, state, value):
+    def learn(self, episode, state, returns):
         """ Optimize the policy given a set of states and corresponding rewards. """
-        feed_dict = {self.observation: state, self.value: value}
+        feed_dict = {self.observation: state, self.G_t: returns}
         summary, _ = self.sess.run([self.merged, self.train_op], feed_dict=feed_dict)
         self.summary_writer.add_summary(summary, episode)
 
@@ -170,16 +164,14 @@ class Episode(object):
 
     def returns(self, gamma):
         """ Return a vector of return values at each time step. """
-        ret = [self._reward_buffer[0]]
-        for t in range(1, self._len):
-            ret.append(ret[t - 1] + (gamma ** t) * self._reward_buffer[t])
-        norm = np.linalg.norm(ret)
-        if norm == 0:
-            return np.stack(ret, axis=0)[:, np.newaxis]
-        return np.stack(ret, axis=0)[:, np.newaxis] / norm 
+        g_t = 0
+        ret = []
+        for t in reversed(range(self._len)):
+            g_t = g_t * gamma + self._reward_buffer[t]
+            ret = [g_t] + ret
+        return np.stack(ret, axis=0)[:, np.newaxis]
 
-
-def reinforce(pi, env):
+def reinforce(pi, env, gamma):
     """ Execute REINFORCE (Monte Carlo policy gradient) to train the argument policy (pi) in
     the argument environment. """
     for ep in tqdm.trange(args.n_eps):
@@ -191,7 +183,7 @@ def reinforce(pi, env):
             state_, reward, done, info = env.step(action)
             episode.append(state, action, reward)
             state = state_
-        pi.learn(ep, episode.states, episode.rewards)
+        pi.learn(ep, episode.states, episode.returns(gamma))
 
 def rollout(pi, env, render=True):
     """ Make the argument policy interact with the environment. """
@@ -214,12 +206,10 @@ def main(args):
     # according to the environment. Note that all environments from Roboschool uses Box for 
     # observation spaces and action spaces.
     env = gym.make(env_id)
-    arch = [
-        env.observation_space.shape[0],
-        args.hidden[0],
-        args.hidden[1],
-        env.action_space.shape[0]
-    ]
+    arch = [env.observation_space.shape[0],
+            args.hidden[0],
+            args.hidden[1],
+            env.action_space.shape[0]]
 
     # Print summary of the experiment setup.
     print("Environment ID:", env_id)
@@ -227,7 +217,7 @@ def main(args):
 
     # Run REINFORCE.
     pi = GaussianPolicy(arch, args.var)
-    reinforce(pi, env)
+    reinforce(pi, env, args.gamma)
 
     # Visually test the trained policy.
     rollout(pi, env)    
