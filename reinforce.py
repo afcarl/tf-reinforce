@@ -36,7 +36,7 @@ def variable_summaries(var):
 class GaussianPolicy(object):
     """ Gaussian policy network with three layers. """
 
-    def __init__(self, arch, sigma_sq):
+    def __init__(self, arch):
         if len(arch) != 4:
             raise ValueError("Policy network architecture must contain 4 integers")
 
@@ -53,7 +53,7 @@ class GaussianPolicy(object):
             with tf.name_scope("b_1"):
                 b_1 = bias_variable([arch[1]])
                 variable_summaries(b_1)
-            a_1 = tf.nn.relu(tf.matmul(self.observation, W_1) + b_1)
+            a_1 = tf.tanh(tf.matmul(self.observation, W_1) + b_1)
 
         # Second hidden layer of the policy network.
         with tf.name_scope("hidden_2"):
@@ -63,11 +63,10 @@ class GaussianPolicy(object):
             with tf.name_scope("b_2"):
                 b_2 = bias_variable([arch[2]])
                 variable_summaries(b_2)
-            a_2 = tf.nn.relu(tf.matmul(a_1, W_2) + b_2)
+            a_2 = tf.tanh(tf.matmul(a_1, W_2) + b_2)
 
-        # Output layer of the policy network.
-        # This layer returns the mean vector of the action distribution.
-        with tf.name_scope("action_mean"):
+        # Output layer for the mean of the action distribution.
+        with tf.name_scope("action_mu"):
             with tf.name_scope("W_3"):
                 W_3 = weight_variable([arch[2], arch[3]])
                 variable_summaries(W_3)
@@ -78,10 +77,22 @@ class GaussianPolicy(object):
                 self.mu = tf.matmul(a_2, W_3) + b_3
                 tf.summary.histogram("mu", self.mu)
 
+        # Output layer for the variance of the action distribution.
+        with tf.name_scope("action_sigma_sq"):
+            with tf.name_scope("W_4"):
+                W_4 = weight_variable([arch[2], arch[3]])
+                variable_summaries(W_4)
+            with tf.name_scope("b_4"):
+                b_4 = bias_variable([arch[3]])
+                variable_summaries(b_4)
+            with tf.name_scope("sigma_sq"):
+                self.sigma_sq = tf.matmul(a_2, W_4) + b_4
+                tf.summary.histogram("sigma_sq", self.sigma_sq)
+
         # Use the output of the policy network as the mean of the action disctribution.
         # The action is sampled from the distribution to compute gradient.
         with tf.name_scope("action"):
-            self.pi_sa = tf.distributions.Normal(self.mu, sigma_sq)
+            self.pi_sa = tf.distributions.Normal(self.mu, self.sigma_sq)
             self.action = self.pi_sa.sample()
             tf.summary.histogram("action", self.action)
 
@@ -93,17 +104,17 @@ class GaussianPolicy(object):
         # L = log(pi(a | s)) * V(s, a)
         with tf.name_scope("loss"):
             log_pi_sa = self.pi_sa.log_prob(self.action)
-            self.loss = tf.reduce_mean(log_pi_sa * self.G_t)
-            tf.summary.scalar("objective", -self.loss)
+            self.loss = -tf.reduce_mean(log_pi_sa * self.G_t)
+            tf.summary.scalar("loss", self.loss)
 
         # Training operator with Adam optimizer.
         # Note that the optimizer minimizes the negative loss, i.e., maximizes the loss.
         with tf.name_scope("train_op"):
             optimizer = tf.train.AdamOptimizer(args.lr)
-            self.train_op = optimizer.minimize(-self.loss)
+            self.train_op = optimizer.minimize(self.loss)
 
-        self.sess = tf.Session()
         self.merged = tf.summary.merge_all()
+        self.sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
         self.summary_writer = tf.summary.FileWriter("./logs", self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
 
@@ -165,35 +176,44 @@ class Episode(object):
     def returns(self, gamma):
         """ Return a vector of return values at each time step. """
         g_t = 0
-        ret = []
+        returns = np.zeros_like(self._reward_buffer)
         for t in reversed(range(self._len)):
             g_t = g_t * gamma + self._reward_buffer[t]
-            ret = [g_t] + ret
-        return np.stack(ret, axis=0)[:, np.newaxis]
+            returns[t] = g_t
+        # Normalize the returns
+        norm = np.linalg.norm(returns)
+        if norm != 0:
+            return np.stack(returns, axis=0)[:, np.newaxis] / norm
+        return np.stack(returns, axis=0)[:, np.newaxis]
+        
 
-def reinforce(pi, env, gamma):
+def reinforce(pi, env, n_eps, gamma):
     """ Execute REINFORCE (Monte Carlo policy gradient) to train the argument policy (pi) in
     the argument environment. """
-    for ep in tqdm.trange(args.n_eps):
-        episode = Episode()
-        state = env.reset()
-        done = False
-        while not done:
-            action = pi(state[np.newaxis, :]).flatten()
-            state_, reward, done, info = env.step(action)
-            episode.append(state, action, reward)
-            state = state_
+    for ep in tqdm.trange(n_eps):
+        episode = rollout(pi, env)
         pi.learn(ep, episode.states, episode.returns(gamma))
 
-def rollout(pi, env, render=True):
+def rollout(pi, env, render=False):
     """ Make the argument policy interact with the environment. """
+    episode = Episode()
     state = env.reset()
     done = False
     while not done:
         if render:
             env.render()
         action = pi(state[np.newaxis, :]).flatten()
-        state, reward, done, info = env.step(action)
+        state_, reward, done, info = env.step(action)
+        episode.append(state, action, reward)
+        state = state_
+    return episode
+
+def export_model():
+    """ Export the trained model. """
+
+    # TODO: implementation
+
+    return
 
 def main(args):
     # Available OpenAI Gym environments from Roboschool.
@@ -216,11 +236,12 @@ def main(args):
     print("Policy architecture:", arch)
 
     # Run REINFORCE.
-    pi = GaussianPolicy(arch, args.var)
-    reinforce(pi, env, args.gamma)
+    pi = GaussianPolicy(arch)
+    reinforce(pi, env, args.n_eps, args.gamma)
 
     # Visually test the trained policy.
-    rollout(pi, env)    
+    input("Training complete, press ENTER when ready.")
+    rollout(pi, env, render=True)    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TensorFlow implementation of Policy Gradient")
@@ -228,7 +249,6 @@ if __name__ == "__main__":
     parser.add_argument("--n_eps", type=int, default=1000, help="Number of episodes for training.")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor for rewards.")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for optimizer.")
-    parser.add_argument("--var", type=float, default=0.01, help="Variance for Gaussian policy.")
     parser.add_argument("--env_id", type=str, default="RoboschoolAnt-v1", 
                         help="OpenAI Roboschool Gym environment ID.")
     args = parser.parse_args()
