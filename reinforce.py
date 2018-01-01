@@ -53,7 +53,7 @@ class GaussianPolicy(object):
             with tf.name_scope("b_1"):
                 b_1 = bias_variable([arch[1]])
                 variable_summaries(b_1)
-            a_1 = tf.tanh(tf.matmul(self.observation, W_1) + b_1)
+            a_1 = tf.nn.relu(tf.matmul(self.observation, W_1) + b_1)
 
         # Second hidden layer of the policy network.
         with tf.name_scope("hidden_2"):
@@ -63,7 +63,7 @@ class GaussianPolicy(object):
             with tf.name_scope("b_2"):
                 b_2 = bias_variable([arch[2]])
                 variable_summaries(b_2)
-            a_2 = tf.tanh(tf.matmul(a_1, W_2) + b_2)
+            a_2 = tf.nn.relu(tf.matmul(a_1, W_2) + b_2)
 
         # Output layer for the mean of the action distribution.
         with tf.name_scope("action_mu"):
@@ -77,17 +77,17 @@ class GaussianPolicy(object):
                 self.mu = tf.matmul(a_2, W_3) + b_3
                 tf.summary.histogram("mu", self.mu)
 
-        # Output layer for the variance of the action distribution.
-        with tf.name_scope("action_sigma_sq"):
-            with tf.name_scope("W_4"):
-                W_4 = weight_variable([arch[2], arch[3]])
-                variable_summaries(W_4)
-            with tf.name_scope("b_4"):
-                b_4 = bias_variable([arch[3]])
-                variable_summaries(b_4)
-            with tf.name_scope("sigma_sq"):
-                self.sigma_sq = tf.matmul(a_2, W_4) + b_4
-                tf.summary.histogram("sigma_sq", self.sigma_sq)
+        ## Output layer for the variance of the action distribution.
+        #with tf.name_scope("action_sigma_sq"):
+        #    with tf.name_scope("W_4"):
+        #        W_4 = weight_variable([arch[2], arch[3]])
+        #        variable_summaries(W_4)
+        #    with tf.name_scope("b_4"):
+        #        b_4 = bias_variable([arch[3]])
+        #        variable_summaries(b_4)
+        #    with tf.name_scope("sigma_sq"):
+        #        self.sigma_sq = tf.matmul(a_2, W_4) + b_4
+        #        tf.summary.histogram("sigma_sq", self.sigma_sq)
 
         # Use the output of the policy network as the mean of the action disctribution.
         # The action is sampled from the distribution to compute gradient.
