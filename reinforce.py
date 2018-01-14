@@ -51,6 +51,7 @@ class Episode(object):
 
 class Policy(object):
     def __init__(self, state_dim, act_dim):
+        self.sess = tf.Session()
         with tf.name_scope("policy_network"):
             self.S = tf.placeholder(tf.float32, [None, state_dim], name="S")
             W = tf.Variable(tf.truncated_normal(shape=[state_dim, act_dim], stddev=0.1), name="W")
@@ -59,13 +60,14 @@ class Policy(object):
         with tf.name_scope("objective"):
             self.G = tf.placeholder(tf.float32, [None], name="G")
             self.objective = tf.reduce_mean(tf.log(self.pi_as) * self.G)
+            tf.summary.scalar("objective", self.objective)
         with tf.name_scope("policy_gradient"):
             theta = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="policy_network")
             delta_theta = tf.gradients(self.objective, theta)
         with tf.name_scope("update"):
             self.alpha = tf.placeholder(tf.float32, name="alpha")
             self.update = [th.assign(th + self.alpha * dth) for th, dth in zip(theta, delta_theta)]
-        self.sess = tf.Session()
+        self.merged = tf.summary.merge_all()
         self.summary_writer = tf.summary.FileWriter("log", graph=self.sess.graph)
         self.sess.run(tf.global_variables_initializer())
 
@@ -73,9 +75,11 @@ class Policy(object):
         """ Evaluate the policy given the argument state, and take an action. """
         return self.sess.run(self.pi_as, feed_dict={self.S: state})
 
-    def train(self, alpha, states, returns):
+    def train_step(self, ep, alpha, states, returns):
         """ Train the policy network given the argument states and returns. """
-        self.sess.run(self.update, feed_dict={self.alpha: alpha, self.S: states, self.G: returns})
+        feed_dict = {self.alpha: alpha, self.S: states, self.G: returns}
+        sess_output = self.sess.run([self.merged] + self.update, feed_dict=feed_dict)
+        self.summary_writer.add_summary(sess_output[0], ep)
 
 def rollout(policy, env, render=False):
     """ Return an episode of the argument policy's rollout in the argument environment. """
@@ -85,30 +89,17 @@ def rollout(policy, env, render=False):
     while not done:
         if render:
             env.render()
-        a = policy(s[np.newaxis, :]).flatten()
+        act_probs = policy(s[np.newaxis, :]).flatten()
+        a = np.random.choice(range(len(act_probs)), p=act_probs)
         s_, r, done, info = env.step(a)
         episode.append(s, a, r)
         s = s_
     return episode
 
-def reinforce(policy, env, n_eps):
-
-    for i in trange(n_eps):
-        ep = Episode()
+def reinforce(policy, env, alpha, gamma, n_eps):
+    for i, episode in enumerate([rollout(policy, env) for i in trange(n_eps)]):
+        policy.train_step(i, alpha, episode.states, episode.returns(gamma))
 
 env = gym.make("CartPole-v1")
-state_dim = env.observation_space.shape[0]
-act_dim = env.action_space.n
-policy = Policy(state_dim, act_dim)
-
-for i in trange(1000):
-    ep = Episode()
-    s = env.reset()
-    done = False
-    while not done:
-        env.render()
-        act_prob = policy(s[np.newaxis, :])
-        s_, r, done, _ = env.step(a)
-        ep.append(s, a, r)
-        s = s_
+reinforce(policy, env, 0.01, 0.99, 5000)
     
