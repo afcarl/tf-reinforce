@@ -18,6 +18,11 @@ class Episode(object):
     def __len__(self):
         return self._T
 
+    def __getitem__(self, t):
+        if t > self._T - 1:
+            raise IndexError("Episode index out of range")
+        return (self._S[t], self._A[t], self._R[t])
+
     @property
     def states(self):
         return self._S
@@ -46,20 +51,24 @@ class Episode(object):
         # Normalize the returns
         norm = np.linalg.norm(returns)
         if norm != 0:
-            return np.stack(returns, axis=0)[:, np.newaxis] / norm
-        return np.stack(returns, axis=0)[:, np.newaxis]
+            return np.stack(returns, axis=0) / norm
+        return np.stack(returns, axis=0)
 
 class Policy(object):
     def __init__(self, state_dim, act_dim):
         self.sess = tf.Session()
+        with tf.name_scope("state"):
+            self.S = tf.placeholder(tf.float32, [state_dim], name="S")
         with tf.name_scope("policy_network"):
-            self.S = tf.placeholder(tf.float32, [None, state_dim], name="S")
             W = tf.Variable(tf.truncated_normal(shape=[state_dim, act_dim], stddev=0.1), name="W")
-            b = tf.Variable(tf.constant(0.1, dtype=tf.float32, shape=[act_dim]), "b")
-            self.pi_as = tf.nn.softmax(tf.matmul(self.S, W) + b)
+            b = tf.Variable(tf.constant(0.1, dtype=tf.float32, shape=[act_dim]), name="b")
+            self.act_probs = tf.squeeze(tf.nn.softmax(tf.matmul(tf.expand_dims(self.S, 0), W) + b))
+        with tf.name_scope("action"):
+            self.A = tf.argmax(self.act_probs, name="A")
+            self.pi_as = tf.gather(self.act_probs, self.A, name="pi_as")
         with tf.name_scope("objective"):
-            self.G = tf.placeholder(tf.float32, [None], name="G")
-            self.objective = tf.reduce_mean(tf.log(self.pi_as) * self.G)
+            self.G = tf.placeholder(tf.float32, name="G")
+            self.objective = tf.log(self.pi_as) * self.G
             tf.summary.scalar("objective", self.objective)
         with tf.name_scope("policy_gradient"):
             theta = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="policy_network")
@@ -73,7 +82,7 @@ class Policy(object):
 
     def __call__(self, state):
         """ Evaluate the policy given the argument state, and take an action. """
-        return self.sess.run(self.pi_as, feed_dict={self.S: state})
+        return self.sess.run(self.A, feed_dict={self.S: state})
 
     def train_step(self, ep, alpha, states, returns):
         """ Train the policy network given the argument states and returns. """
@@ -89,17 +98,23 @@ def rollout(policy, env, render=False):
     while not done:
         if render:
             env.render()
-        act_probs = policy(s[np.newaxis, :]).flatten()
-        a = np.random.choice(range(len(act_probs)), p=act_probs)
+        a = policy(s)
         s_, r, done, info = env.step(a)
         episode.append(s, a, r)
         s = s_
     return episode
 
 def reinforce(policy, env, alpha, gamma, n_eps):
-    for i, episode in enumerate([rollout(policy, env) for i in trange(n_eps)]):
-        policy.train_step(i, alpha, episode.states, episode.returns(gamma))
+    for i in trange(n_eps):
+        episode = rollout(policy, env)
+        returns = episode.returns(gamma)
+        for t, (s, a, r) in enumerate(episode):
+            policy.train_step(t, alpha, s, returns[t])
 
 env = gym.make("CartPole-v1")
-reinforce(policy, env, 0.01, 0.99, 5000)
-    
+state_dim = env.observation_space.shape[0]
+act_dim = env.action_space.n
+policy = Policy(state_dim, act_dim)
+reinforce(policy, env, 0.01, 0.99, 10000)
+input("Training complete, press ENTER when ready.")
+rollout(policy, env, render=True)
