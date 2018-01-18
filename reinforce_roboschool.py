@@ -91,7 +91,7 @@ class GaussianPolicy(object):
         # Loss function of Gaussian policy.
         # L = log(pi(a | s)) * V(s, a)
         with tf.name_scope("loss"):
-            log_pi_sa = self.pi_sa.log_prob(self.action)
+            log_pi_sa = -0.5 * ((self.action - self.mu) ** 2)
             self.loss = -tf.reduce_mean(log_pi_sa * self.G_t)
             tf.summary.scalar("loss", self.loss)
 

@@ -83,7 +83,7 @@ class Policy(object):
             self.objective = tf.log(self.pi_as) * self.G
             tf.summary.scalar("objective", self.objective)
         with tf.name_scope("train_op"):
-            optimizer = tf.train.AdamOptimizer(0.01)
+            optimizer = tf.train.AdamOptimizer()
             self.train_op = optimizer.minimize(-self.objective)
         self.merged = tf.summary.merge_all()
         self.summary_writer = tf.summary.FileWriter("log", graph=self.sess.graph)
@@ -125,6 +125,6 @@ env = gym.make("CartPole-v1")
 state_dim = env.observation_space.shape[0]
 act_dim = env.action_space.n
 policy = Policy(state_dim, act_dim)
-reinforce(policy, env, 0.99, 5000)
+reinforce(policy, env, 0.9, 5000)
 input("Training complete, press ENTER when ready.")
 rollout(policy, env, render=True)
